@@ -14,6 +14,8 @@ pub type ReadPairId = String;
 pub enum ReadOrder {
     First,
     Last,
+    Middle,
+    Unknown,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -137,6 +139,7 @@ impl RecordManager {
                     read_pair.last = Some(record.clone());
                 }
             }
+            _ => {}
         }
 
         // // Insert the read pair ID into the read pair ID index
@@ -280,15 +283,16 @@ impl RecordManager {
     }
 
     pub fn get_record_order(record: &bam::Record) -> ReadOrder {
-        if record.is_first_in_template() && !record.is_last_in_template() {
-            ReadOrder::First
-        } else if !record.is_first_in_template() && record.is_last_in_template() {
-            ReadOrder::Last
-        } else {
-            panic!("Record is not exclusively first or last in template");
+        let is_first = record.is_first_in_template();
+        let is_last = record.is_last_in_template();
+
+        match (is_first, is_last) {
+            (true, false) => ReadOrder::First,    // First read in template
+            (false, true) => ReadOrder::Last,     // Last read in template
+            (true, true) => ReadOrder::Middle,    // Both 0x40 and 0x80 are set
+            (false, false) => ReadOrder::Unknown, // Neither 0x40 nor 0x80 is set
         }
     }
-
     pub fn get_read_pair_id(record: &bam::Record) -> ReadPairId {
         record.qname().to_string()
     }
