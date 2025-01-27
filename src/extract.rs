@@ -411,8 +411,36 @@ pub fn seq_passes_purity_score(
     motif: &[u8],
     params: &RepeatPurityScoreParams,
 ) -> bool {
-    let score = purity_score(seq, base_quals, motif, params);
-    score >= params.irr_score_min
+    let required_score = seq.len() as f32 * params.irr_score_min;
+
+    let mut score = 0.0;
+
+    for (i, (base, &qual)) in seq.iter().zip(base_quals).enumerate() {
+        let motif_base = motif[i % motif.len()];
+        if *base == motif_base {
+            score += params.match_weight;
+        } else if qual >= params.base_qual_min {
+            score += params.mismatch_weight;
+        } else {
+            score += params.low_qual_mismatch_weight;
+        }
+
+        // Compute the maximum potential score remaining
+        let remaining_bases = seq.len() - i - 1;
+        let max_possible_score = score + remaining_bases as f32 * params.match_weight;
+
+        // Exit early if it's impossible to reach the threshold
+        if max_possible_score < required_score {
+            return false;
+        }
+
+        // Exit early if the current score exceeds the threshold
+        if score >= required_score {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub fn purity_score(
