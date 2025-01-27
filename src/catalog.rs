@@ -1,15 +1,10 @@
 use crate::sequence::Sequence;
-use aho_corasick::{AhoCorasick, PatternID};
 use anyhow::{Context, Ok, Result};
 use bio::data_structures::interval_tree::IntervalTree;
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::ops::Index;
 use std::path::Path;
-
-pub const KMER_SIZE: usize = 17;
 
 /// Represents a single locus in a tandem repeat catalog
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Hash)]
@@ -32,6 +27,9 @@ impl fmt::Display for TandemRepeatLocus {
 /// lookup of loci overlapping a given interval.
 #[derive(Debug, Clone)]
 pub struct TandemRepeatCatalog {
+    /// K-mer size for motif matching
+    k: usize,
+    /// Vector of tandem repeat loci
     loci: Vec<TandemRepeatLocus>,
     /// Map from contig name to interval tree of locus indices
     trees: HashMap<String, IntervalTree<i64, usize>>,
@@ -42,8 +40,9 @@ pub struct TandemRepeatCatalog {
 }
 
 impl TandemRepeatCatalog {
-    pub fn new() -> Self {
+    pub fn new(k: usize) -> Self {
         Self {
+            k,
             loci: Vec::new(),
             trees: HashMap::new(),
             motif_map: HashMap::new(),
@@ -86,9 +85,8 @@ impl TandemRepeatCatalog {
         let mut motif_rc = locus.motif.revcomp().as_ref().to_vec();
 
         for _ in 0..locus.motif.len() {
-            let motif_padded: Vec<u8> = motif.iter().cycle().take(KMER_SIZE).cloned().collect();
-            let motif_rc_padded: Vec<u8> =
-                motif_rc.iter().cycle().take(KMER_SIZE).cloned().collect();
+            let motif_padded: Vec<u8> = motif.iter().cycle().take(self.k).cloned().collect();
+            let motif_rc_padded: Vec<u8> = motif_rc.iter().cycle().take(self.k).cloned().collect();
 
             self.motif_map
                 .entry(motif_padded.clone())
@@ -136,15 +134,16 @@ impl TandemRepeatCatalog {
     pub fn find_motifs(&self, seq: &[u8]) -> Vec<&TandemRepeatLocus> {
         let mut result = HashSet::new();
         let mut i = 0;
-        while i + KMER_SIZE <= seq.len() {
-            let kmer = &seq[i..i + KMER_SIZE];
+        let k = self.k;
+        while i + k <= seq.len() {
+            let kmer = &seq[i..i + k];
             let locus_idxs = self.motif_map.get(kmer);
             if let Some(locus_idxs) = locus_idxs {
                 for &locus_idx in locus_idxs {
                     result.insert(locus_idx);
                 }
             }
-            i += KMER_SIZE;
+            i += k;
         }
         result.iter().map(|&i| &self.loci[i]).collect()
     }
@@ -161,8 +160,11 @@ impl TandemRepeatCatalog {
         self.loci.is_empty()
     }
 
-    pub fn from_path<P: AsRef<Path> + std::fmt::Debug + ?Sized>(path: &P) -> Result<Self> {
-        let mut catalog = TandemRepeatCatalog::new();
+    pub fn from_path<P: AsRef<Path> + std::fmt::Debug + ?Sized>(
+        path: &P,
+        k: usize,
+    ) -> Result<Self> {
+        let mut catalog = TandemRepeatCatalog::new(k);
         let mut reader = csv::ReaderBuilder::new()
             .delimiter(b'\t')
             .from_path(path)
@@ -183,12 +185,6 @@ impl TandemRepeatCatalog {
             writer.serialize(locus)?;
         }
         Ok(())
-    }
-}
-
-impl Default for TandemRepeatCatalog {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::{
     catalog::TandemRepeatCatalog,
-    constants::{OUT_SUFFIX_BAG, OUT_SUFFIX_BAG_UNSORTED},
+    constants::{DEFAULT_KMER_SIZE, OUT_SUFFIX_BAG, OUT_SUFFIX_BAG_UNSORTED},
     extract::{extract_bag_of_reads, RepeatPurityScoreParams},
 };
 use anyhow::Ok;
@@ -19,6 +19,10 @@ pub struct ExtractCommandArgs {
 
     /// Path to tandem repeat catalog TSV file
     pub catalog: PathBuf,
+
+    /// K-mer size used for matching reads with candidate tandem repeats
+    #[arg(short = 'k', default_value_t = DEFAULT_KMER_SIZE)]
+    pub kmer_size: usize,
 
     /// Number of threads to use for reading the alignment file (htslib-specific)
     #[arg(short = '@', default_value_t = 1)]
@@ -65,7 +69,7 @@ pub struct ExtractCommandArgs {
 pub fn run_extract_command(args: &ExtractCommandArgs, output_prefix: &Path) -> anyhow::Result<()> {
     // Open TR catalog
     info!("Loading catalog");
-    let catalog = TandemRepeatCatalog::from_path(&args.catalog)?;
+    let catalog = TandemRepeatCatalog::from_path(&args.catalog, args.kmer_size)?;
     info!("Loaded {} loci from catalog", catalog.len());
 
     // Open input alignments file

@@ -1,6 +1,6 @@
 use crate::{
     catalog::TandemRepeatCatalog,
-    constants::OUT_SUFFIX_BAG,
+    constants::{DEFAULT_KMER_SIZE, OUT_SUFFIX_BAG},
     extract::{get_locus_id, Read},
     genotype::GenotypeProblemDefinition,
     reference::TandemRepeatReference,
@@ -45,7 +45,7 @@ pub struct DefineCommandArgs {
 
 pub fn run_define_command(args: &DefineCommandArgs, output_prefix: &Path) -> Result<()> {
     info!("Loading catalog");
-    let catalog = TandemRepeatCatalog::from_path(&args.catalog)?;
+    let catalog = TandemRepeatCatalog::from_path(&args.catalog, DEFAULT_KMER_SIZE)?;
     info!("Loaded {} loci from catalog", catalog.len());
 
     info!("Loading reference genome");
