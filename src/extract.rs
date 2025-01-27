@@ -10,6 +10,7 @@ use crate::{
 use anyhow::anyhow;
 use anyhow::{Context, Ok, Result};
 use bio::alphabets::dna::revcomp;
+use indicatif::{ProgressBar, ProgressStyle};
 use rust_htslib::bam::FetchDefinition;
 use rust_htslib::{
     bam,
@@ -20,10 +21,10 @@ use serde::{
     de::{self, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::str::FromStr;
+use std::{collections::HashMap, time::Duration};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LocusFlankSizes {
@@ -146,13 +147,19 @@ pub fn extract_bag_of_reads(
     purity_score_params: &RepeatPurityScoreParams,
 ) -> Result<()> {
     let header = reader.header().clone();
-    let ac = catalog
-        .build_ac()
-        .context("Failed to build Aho-Corasick automaton")?;
 
     reader.fetch(FetchDefinition::All)?;
 
     let mut record_manager = RecordManager::new();
+
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::with_template(
+            "{spinner} [{elapsed_precise}] Processed {pos} reads. Reads per second: {per_sec} {msg}",
+        )
+        .unwrap(),
+    );
+    spinner.enable_steady_tick(Duration::from_secs(1));
 
     for record_result in reader.rc_records() {
         let record = record_result?;
@@ -175,7 +182,7 @@ pub fn extract_bag_of_reads(
         // }
 
         if record.mapq() <= max_irr_mapq {
-            let candidate_irr_for_loci = catalog.find_motifs(&record.seq().as_bytes(), &ac);
+            let candidate_irr_for_loci = catalog.find_motifs(&record.seq().as_bytes());
             for locus in candidate_irr_for_loci {
                 if is_in_repeat_read(&record, &locus.motif, purity_score_params) {
                     debug!(
@@ -219,7 +226,11 @@ pub fn extract_bag_of_reads(
                 }
             }
         }
+
+        spinner.inc(1);
     }
+
+    spinner.finish_and_clear();
 
     // For each locus, rescue mates that are mapped
     for locus in catalog.iter() {

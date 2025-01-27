@@ -9,6 +9,8 @@ use std::fmt;
 use std::ops::Index;
 use std::path::Path;
 
+pub const KMER_SIZE: usize = 17;
+
 /// Represents a single locus in a tandem repeat catalog
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Hash)]
 pub struct TandemRepeatLocus {
@@ -34,7 +36,7 @@ pub struct TandemRepeatCatalog {
     /// Map from contig name to interval tree of locus indices
     trees: HashMap<String, IntervalTree<i64, usize>>,
     /// Map of motif to locus indices
-    motif_map: IndexMap<Sequence, Vec<usize>>,
+    motif_map: HashMap<Vec<u8>, HashSet<usize>>,
     /// Map of locus IDs to locus indices
     id_map: HashMap<String, usize>,
 }
@@ -44,7 +46,7 @@ impl TandemRepeatCatalog {
         Self {
             loci: Vec::new(),
             trees: HashMap::new(),
-            motif_map: IndexMap::new(),
+            motif_map: HashMap::new(),
             id_map: HashMap::new(),
         }
     }
@@ -63,18 +65,39 @@ impl TandemRepeatCatalog {
             .insert(locus.start..locus.end, locus_index);
 
         // Insert locus into motif map
-        let mut motif = locus.motif.clone();
-        let mut motif_rc = motif.revcomp();
+
+        // let mut motif = locus.motif.clone();
+        // let mut motif_rc = motif.revcomp();
+
+        // for _ in 0..locus.motif.len() {
+        //     self.motif_map
+        //         .entry(motif.clone())
+        //         .or_default()
+        //         .push(locus_index);
+        //     self.motif_map
+        //         .entry(motif_rc.clone())
+        //         .or_default()
+        //         .push(locus_index);
+        //     motif.rotate_left(1);
+        //     motif_rc.rotate_left(1);
+        // }
+
+        let mut motif = locus.motif.as_ref().to_vec();
+        let mut motif_rc = locus.motif.revcomp().as_ref().to_vec();
 
         for _ in 0..locus.motif.len() {
+            let motif_padded: Vec<u8> = motif.iter().cycle().take(KMER_SIZE).cloned().collect();
+            let motif_rc_padded: Vec<u8> =
+                motif_rc.iter().cycle().take(KMER_SIZE).cloned().collect();
+
             self.motif_map
-                .entry(motif.clone())
+                .entry(motif_padded.clone())
                 .or_default()
-                .push(locus_index);
+                .insert(locus_index);
             self.motif_map
-                .entry(motif_rc.clone())
+                .entry(motif_rc_padded.clone())
                 .or_default()
-                .push(locus_index);
+                .insert(locus_index);
             motif.rotate_left(1);
             motif_rc.rotate_left(1);
         }
@@ -103,30 +126,27 @@ impl TandemRepeatCatalog {
         }
     }
 
-    pub fn build_ac(&self) -> Result<AhoCorasick> {
-        let patterns: Vec<Vec<u8>> = self.motif_map.keys().map(|s| s.as_ref().to_vec()).collect();
-        let ac = AhoCorasick::new(patterns)
-            .context("Failed to create AhoCorasick automaton for catalog")?;
-        Ok(ac)
-    }
+    // pub fn build_ac(&self) -> Result<AhoCorasick> {
+    //     let patterns: Vec<Vec<u8>> = self.motif_map.keys().map(|s| s.as_ref().to_vec()).collect();
+    //     let ac = AhoCorasick::new(patterns)
+    //         .context("Failed to create AhoCorasick automaton for catalog")?;
+    //     Ok(ac)
+    // }
 
-    pub fn find_motifs(&self, seq: &[u8], ac: &AhoCorasick) -> Vec<&TandemRepeatLocus> {
+    pub fn find_motifs(&self, seq: &[u8]) -> Vec<&TandemRepeatLocus> {
         let mut result = HashSet::new();
-        for m in ac.find_iter(seq) {
-            let p = m.pattern();
-            for locus in self.find_pattern_id(&p) {
-                result.insert(locus);
+        let mut i = 0;
+        while i + KMER_SIZE <= seq.len() {
+            let kmer = &seq[i..i + KMER_SIZE];
+            let locus_idxs = self.motif_map.get(kmer);
+            if let Some(locus_idxs) = locus_idxs {
+                for &locus_idx in locus_idxs {
+                    result.insert(locus_idx);
+                }
             }
+            i += KMER_SIZE;
         }
-        result.into_iter().collect()
-    }
-
-    fn find_pattern_id(&self, p: &PatternID) -> Vec<&TandemRepeatLocus> {
-        self.motif_map
-            .index(p.as_usize())
-            .iter()
-            .map(|&i| &self.loci[i])
-            .collect()
+        result.iter().map(|&i| &self.loci[i]).collect()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &TandemRepeatLocus> {
