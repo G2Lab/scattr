@@ -16,7 +16,7 @@ pub const SAM_ID_TAG: &[u8; 2] = b"ZI";
 pub const SAM_READ_TYPE_TAG: &[u8; 2] = b"ZT";
 pub const SAM_READ_PAIR_TYPE_TAG: &[u8; 2] = b"ZP";
 
-pub const DEFAULT_KMER_SIZE: usize = 9;
+pub const DEFAULT_KMER_SIZE: usize = 8;
 
 // Genotyping parameters
 pub const INITIAL_ESTIMATE_READ_LENGTH: usize = 150;
