@@ -104,8 +104,18 @@ impl<'a> GenotypeProblem<'a> {
             self.left_flank_len + hap2_genotype as usize * self.motif_len + self.right_flank_len;
 
         let insert_mean = self.insert_distr.mean() as usize;
-        let hap1_depth_range = insert_mean..(hap1_len - insert_mean);
-        let hap2_depth_range = insert_mean..(hap2_len - insert_mean);
+
+        let hap1_depth_range = if hap1_len <= 2 * insert_mean {
+            0..hap1_len
+        } else {
+            insert_mean..(hap1_len - insert_mean)
+        };
+
+        let hap2_depth_range = if hap2_len <= 2 * insert_mean {
+            0..hap2_len
+        } else {
+            insert_mean..(hap2_len - insert_mean)
+        };
 
         let mut rng = self.rng.lock().unwrap();
         let aln_rng = Xoshiro256PlusPlus::from_rng(&mut *rng)?;
