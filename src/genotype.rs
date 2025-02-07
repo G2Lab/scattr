@@ -52,8 +52,13 @@ impl<'a> GenotypeProblem<'a> {
         rng: Xoshiro256PlusPlus,
     ) -> Self {
         let aln_position_generators = aln_problem_def.create_position_generators();
-        let read_lens = aln_problem_def.reads.iter().map(|r| r.seq.len()).collect();
-        let (left_flank_len, right_flank_len) = Self::get_flank_lens(&aln_position_generators);
+        let read_lens: Vec<usize> = aln_problem_def.reads.iter().map(|r| r.seq.len()).collect();
+
+        let max_read_len = *read_lens.iter().max().unwrap();
+        let insert_mean = insert_distr.mean() as usize + 1;
+        let (left_flank_len, right_flank_len) =
+            Self::get_flank_lens(&aln_position_generators, max_read_len, insert_mean);
+
         let motif_len = aln_problem_def.motif_len();
 
         let mut pairs = HashSet::new();
@@ -81,6 +86,8 @@ impl<'a> GenotypeProblem<'a> {
 
     fn get_flank_lens(
         aln_position_generators: &[RepeatAlignmentPositionSetGenerator],
+        max_read_len: usize,
+        insert_mean: usize,
     ) -> (usize, usize) {
         let left_flank_len = aln_position_generators
             .iter()
@@ -92,7 +99,10 @@ impl<'a> GenotypeProblem<'a> {
             .map(|g| g.distance_furthest_from_repeat_end())
             .max()
             .unwrap() as usize;
-        (left_flank_len, right_flank_len)
+        (
+            left_flank_len.max(max_read_len).max(insert_mean),
+            right_flank_len.max(max_read_len).max(insert_mean),
+        )
     }
 
     pub fn build_aln_problem(&self, genotype: TandemRepeatGenotype) -> Result<AlignmentProblem> {
