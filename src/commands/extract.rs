@@ -4,9 +4,11 @@ use crate::{
     extract::{extract_bag_of_reads, RepeatPurityScoreParams},
 };
 use anyhow::Ok;
+use bitcode::{Decode, Encode};
 use clap::{arg, Parser};
 use rust_htslib::bam::{self, Read};
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -98,7 +100,7 @@ pub fn run_extract_command(args: &ExtractCommandArgs, output_prefix: &Path) -> a
     };
 
     info!("Extracting bag of reads");
-    extract_bag_of_reads(
+    let locus_reads = extract_bag_of_reads(
         &mut reader,
         &mut writer,
         catalog,
@@ -109,6 +111,12 @@ pub fn run_extract_command(args: &ExtractCommandArgs, output_prefix: &Path) -> a
     )?;
 
     drop(writer);
+
+    // Write locus reads to file using bitcode library
+    info!("Writing locus-read associations to file");
+    let mut output = std::fs::File::create(output_prefix.with_extension("bag.bin"))?;
+    let encoded = bitcode::encode(&locus_reads);
+    output.write_all(&encoded)?;
 
     if args.sort_and_index {
         info!("Sorting and indexing output file");

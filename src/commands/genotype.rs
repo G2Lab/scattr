@@ -189,6 +189,7 @@ pub fn run_genotype_command(
     }
 
     // Output genotypes
+    info!("Writing genotype results to file");
     let gt_results_path = output_prefix.with_extension(OUT_SUFFIX_GENOTYPES);
     let file = File::create(gt_results_path)?;
     serde_json::to_writer_pretty(file, &gt_results)?;

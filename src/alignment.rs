@@ -163,7 +163,7 @@ impl<'a> AlignmentProblem<'a> {
 
         // Create a uniform distribution for sampling free pairs
         let free_pair_idx_distr = if free_pairs.is_empty() {
-            warn!("No free pairs found");
+            // warn!("No free pairs found");
             None
         } else {
             Some(Uniform::new(0, free_pairs.len()))
@@ -379,10 +379,10 @@ impl<'a> AlignmentProblem<'a> {
             .collect::<Vec<_>>();
 
         let weighted_index = if pair_likelihoods.iter().sum::<f64>() == 0.0 {
-            warn!(
-                "All position likelihoods are zero for read pair ({}, {})",
-                read1_idx, read2_idx
-            );
+            // warn!(
+            //     "All position likelihoods are zero for read pair ({}, {})",
+            //     read1_idx, read2_idx
+            // );
             WeightedIndex::new(vec![1.0; compatible_positions.len()]).unwrap()
         } else {
             WeightedIndex::new(pair_likelihoods).unwrap()

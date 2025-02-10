@@ -1,9 +1,11 @@
+use std::collections::hash_map::Entry;
 use std::fmt;
 use std::{
     collections::{HashMap, HashSet},
     hash::Hash,
 };
 
+use anyhow::{Ok, Result};
 use rust_htslib::bam;
 
 use crate::{extract::LocusId, util::Utf8String};
@@ -11,11 +13,30 @@ use crate::{extract::LocusId, util::Utf8String};
 pub type ReadPairId = String;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
-pub enum ReadOrder {
+pub enum OrderInTemplate {
     First,
     Last,
     Middle,
     Unknown,
+}
+
+pub trait RecordOrder {
+    fn order_in_template(&self) -> OrderInTemplate;
+}
+
+// make a trait for read order for htslib Record
+impl RecordOrder for bam::Record {
+    fn order_in_template(&self) -> OrderInTemplate {
+        let is_first = self.is_first_in_template();
+        let is_last = self.is_last_in_template();
+
+        match (is_first, is_last) {
+            (true, false) => OrderInTemplate::First, // First read in template
+            (false, true) => OrderInTemplate::Last,  // Last read in template
+            (true, true) => OrderInTemplate::Middle, // Both 0x40 and 0x80 are set
+            (false, false) => OrderInTemplate::Unknown, // Neither 0x40 nor 0x80 is set
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
@@ -95,11 +116,57 @@ impl ReadPair {
     }
 }
 
+#[derive(Clone)]
+pub struct UnpairedRecordInfo {
+    pub order: OrderInTemplate,
+    pub mtid: i32,
+    pub mpos: i64,
+}
+
+pub type QueryName = Vec<u8>;
+pub struct BetterRecordManager<'a> {
+    writer: &'a mut bam::Writer,
+    unpaired_records: HashMap<QueryName, UnpairedRecordInfo>,
+}
+
+impl<'a> BetterRecordManager<'a> {
+    pub fn new(writer: &'a mut bam::Writer) -> Self {
+        Self {
+            writer,
+            unpaired_records: HashMap::new(),
+        }
+    }
+
+    pub fn write_record(&mut self, record: &bam::Record) -> Result<()> {
+        let qname = record.qname().to_vec();
+        let order = record.order_in_template();
+
+        // We assume that this function is called only once for each unique read
+        if let Entry::Vacant(e) = self.unpaired_records.entry(qname.clone()) {
+            e.insert(UnpairedRecordInfo {
+                order,
+                mtid: record.mtid(),
+                mpos: record.mpos(),
+            });
+            self.writer.write(record)?;
+        } else {
+            let prev_record = self.unpaired_records.remove(&qname).unwrap();
+            assert!(prev_record.order != order);
+            self.writer.write(record)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_unpaired_records(&self) -> HashMap<QueryName, UnpairedRecordInfo> {
+        self.unpaired_records.clone()
+    }
+}
+
 pub struct RecordManager {
     read_pairs: HashMap<ReadPairId, ReadPair>,
     locus_index: HashMap<LocusId, HashSet<ReadPairId>>,
     read_pair_id_index: HashMap<ReadPairId, HashSet<LocusId>>,
-    locus_read_kind: HashMap<(LocusId, ReadPairId, ReadOrder), Option<ReadKind>>,
+    locus_read_kind: HashMap<(LocusId, ReadPairId, OrderInTemplate), Option<ReadKind>>,
 }
 
 impl RecordManager {
@@ -112,7 +179,7 @@ impl RecordManager {
         }
     }
 
-    pub fn add_read(&mut self, record: &bam::Record) -> (ReadPairId, ReadOrder) {
+    pub fn add_read(&mut self, record: &bam::Record) -> (ReadPairId, OrderInTemplate) {
         // Get the read pair ID and order (first or last)
         let read_pair_id = Self::get_read_pair_id(record);
         let read_order = Self::get_record_order(record);
@@ -129,12 +196,12 @@ impl RecordManager {
 
         // Update the read pair with the new read
         match read_order {
-            ReadOrder::First => {
+            OrderInTemplate::First => {
                 if read_pair.first.is_none() {
                     read_pair.first = Some(record.clone());
                 }
             }
-            ReadOrder::Last => {
+            OrderInTemplate::Last => {
                 if read_pair.last.is_none() {
                     read_pair.last = Some(record.clone());
                 }
@@ -158,7 +225,7 @@ impl RecordManager {
         locus_id: &LocusId,
         record: &bam::Record,
         kind: ReadKind,
-    ) -> (ReadPairId, ReadOrder) {
+    ) -> (ReadPairId, OrderInTemplate) {
         // Add the read to the record manager
         let (read_pair_id, read_order) = self.add_read(record);
 
@@ -222,7 +289,7 @@ impl RecordManager {
         &mut self,
         locus_id: &LocusId,
         read_pair_id: &ReadPairId,
-        read_order: &ReadOrder,
+        read_order: &OrderInTemplate,
         read_kind: ReadKind,
     ) {
         self.locus_read_kind.insert(
@@ -235,7 +302,7 @@ impl RecordManager {
         &self,
         locus_id: &LocusId,
         read_pair_id: &ReadPairId,
-        read_order: &ReadOrder,
+        read_order: &OrderInTemplate,
     ) -> Option<ReadKind> {
         self.locus_read_kind
             .get(&(locus_id.clone(), read_pair_id.clone(), read_order.clone()))
@@ -248,8 +315,8 @@ impl RecordManager {
         locus_id: &LocusId,
         read_pair_id: &ReadPairId,
     ) -> ReadPairKind {
-        let first_kind = self.get_read_kind(locus_id, read_pair_id, &ReadOrder::First);
-        let last_kind = self.get_read_kind(locus_id, read_pair_id, &ReadOrder::Last);
+        let first_kind = self.get_read_kind(locus_id, read_pair_id, &OrderInTemplate::First);
+        let last_kind = self.get_read_kind(locus_id, read_pair_id, &OrderInTemplate::Last);
 
         match (first_kind, last_kind) {
             (Some(ReadKind::FlankingRead), Some(ReadKind::FlankingRead)) => {
@@ -282,15 +349,15 @@ impl RecordManager {
             .collect()
     }
 
-    pub fn get_record_order(record: &bam::Record) -> ReadOrder {
+    pub fn get_record_order(record: &bam::Record) -> OrderInTemplate {
         let is_first = record.is_first_in_template();
         let is_last = record.is_last_in_template();
 
         match (is_first, is_last) {
-            (true, false) => ReadOrder::First,    // First read in template
-            (false, true) => ReadOrder::Last,     // Last read in template
-            (true, true) => ReadOrder::Middle,    // Both 0x40 and 0x80 are set
-            (false, false) => ReadOrder::Unknown, // Neither 0x40 nor 0x80 is set
+            (true, false) => OrderInTemplate::First, // First read in template
+            (false, true) => OrderInTemplate::Last,  // Last read in template
+            (true, true) => OrderInTemplate::Middle, // Both 0x40 and 0x80 are set
+            (false, false) => OrderInTemplate::Unknown, // Neither 0x40 nor 0x80 is set
         }
     }
     pub fn get_read_pair_id(record: &bam::Record) -> ReadPairId {

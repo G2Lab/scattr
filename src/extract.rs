@@ -2,7 +2,10 @@ use crate::{
     catalog::TandemRepeatCatalog,
     constants::{SAM_ID_TAG, SAM_READ_PAIR_TYPE_TAG, SAM_READ_TYPE_TAG},
     positions::{HammingDistance, RepeatAlignmentPosition, RepeatAlignmentPositionSetGenerator},
-    records::{ReadKind, ReadOrder, ReadPairId, RecordManager},
+    records::{
+        BetterRecordManager, OrderInTemplate, QueryName, ReadKind, ReadPairId, RecordManager,
+        RecordOrder,
+    },
     reference::TandemRepeatReference,
     sequence::Sequence,
     util::Utf8String,
@@ -21,10 +24,11 @@ use serde::{
     de::{self, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
-use std::fmt;
+use smallvec::SmallVec;
 use std::hash::Hash;
 use std::str::FromStr;
 use std::{collections::HashMap, time::Duration};
+use std::{collections::HashSet, fmt};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LocusFlankSizes {
@@ -136,6 +140,7 @@ impl Read {
 }
 
 pub type LocusId = String;
+pub type QueryNameLocusMap = HashMap<QueryName, HashSet<LocusId>>;
 
 pub fn extract_bag_of_reads(
     reader: &mut bam::IndexedReader,
@@ -145,12 +150,14 @@ pub fn extract_bag_of_reads(
     min_flank_mapq: u8,
     max_irr_mapq: u8,
     purity_score_params: &RepeatPurityScoreParams,
-) -> Result<()> {
+) -> Result<QueryNameLocusMap> {
     let header = reader.header().clone();
 
     reader.fetch(FetchDefinition::All)?;
 
-    let mut record_manager = RecordManager::new();
+    // let mut record_manager = RecordManager::new();
+    let mut brecord_manager = BetterRecordManager::new(writer);
+    let mut qname_locus_map: QueryNameLocusMap = HashMap::new();
 
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
@@ -172,14 +179,7 @@ pub fn extract_bag_of_reads(
 
         debug!("Processing read pair {}", read_pair_id);
 
-        // Add the read to the record manager if it is part of a read pair
-        // if record_manager.contains_read_pair_id(&read_pair_id) {
-        //     debug!(
-        //         "Adding read to record manager for read pair {}",
-        //         read_pair_id
-        //     );
-        //     record_manager.add_read(record.as_ref());
-        // }
+        let mut already_written = false;
 
         if record.mapq() <= max_irr_mapq {
             let candidate_irr_for_loci = catalog.find_motifs(&record.seq().as_bytes());
@@ -190,11 +190,14 @@ pub fn extract_bag_of_reads(
                         record.qname().to_string(),
                         locus.id
                     );
-                    record_manager.add_read_to_locus_with_kind(
-                        &locus.id,
-                        record.as_ref(),
-                        ReadKind::InRepeatRead,
-                    );
+                    if !already_written {
+                        brecord_manager.write_record(&record)?;
+                        already_written = true;
+                    }
+                    qname_locus_map
+                        .entry(record.qname().clone().to_vec())
+                        .or_default()
+                        .insert(locus.id.clone());
                 }
             }
         }
@@ -218,11 +221,14 @@ pub fn extract_bag_of_reads(
                         record.qname().to_string(),
                         locus.id
                     );
-                    record_manager.add_read_to_locus_with_kind(
-                        &locus.id,
-                        record.as_ref(),
-                        ReadKind::FlankingRead,
-                    );
+                    if !already_written {
+                        brecord_manager.write_record(&record)?;
+                        already_written = true;
+                    }
+                    qname_locus_map
+                        .entry(record.qname().clone().to_vec())
+                        .or_default()
+                        .insert(locus.id.clone());
                 }
             }
         }
@@ -232,138 +238,48 @@ pub fn extract_bag_of_reads(
 
     spinner.finish_and_clear();
 
-    // For each locus, rescue mates that are mapped
-    for locus in catalog.iter() {
-        let incomplete_read_pairs_ids =
-            record_manager.incomplete_read_pair_ids_for_locus(&locus.id);
-        for read_pair_id in incomplete_read_pairs_ids {
-            let read_pair = record_manager.get_read_pair_by_id(&read_pair_id).unwrap();
-
-            let (read, read_order) = if read_pair.first.is_some() {
-                (read_pair.first.unwrap(), ReadOrder::First)
-            } else {
-                (read_pair.last.unwrap(), ReadOrder::Last)
-            };
-
-            let read_kind = record_manager
-                .get_read_kind(&locus.id, &read_pair_id, &read_order)
-                .unwrap();
-
-            // Only rescue mates for flanking reads (in-repeat reads mates should have been found)
-            if read_kind == ReadKind::FlankingRead && !read.is_mate_unmapped() {
-                let mate_tid = read.mtid();
-                let mate_pos = read.mpos();
-                if mate_tid >= 0 {
-                    reader.fetch((mate_tid, mate_pos, mate_pos + 1))?;
-                    for record_result in reader.rc_records() {
-                        let record = record_result?;
-                        if is_primary_read(&record) && record.qname().to_string() == read_pair.id {
-                            record_manager.add_read_to_locus_with_kind(
-                                &locus.id,
-                                record.as_ref(),
-                                ReadKind::FlankingRead,
-                            );
-                            break;
-                        }
-                    }
-                } else {
-                    warn!(
-                        "Read pair {} has a mate with invalid tid {}",
-                        read_pair.id, mate_tid
-                    );
+    info!("Rescuing mapped mates");
+    let unpaired_records = brecord_manager.get_unpaired_records();
+    for (qname, info) in unpaired_records {
+        if info.mtid >= 0 {
+            reader.fetch((info.mtid, info.mpos, info.mpos + 1))?;
+            for record_result in reader.rc_records() {
+                let record = record_result?;
+                if is_primary_read(&record)
+                    && record.qname() == qname
+                    && record.order_in_template() != info.order
+                {
+                    brecord_manager.write_record(&record)?;
+                    break;
                 }
             }
         }
     }
 
-    // Rescue mates (for reads with mates that are unmapped)
-    let incomplete_read_pair_ids = record_manager.incomplete_read_pair_ids();
-    if !incomplete_read_pair_ids.is_empty() {
-        reader.fetch(FetchDefinition::Unmapped)?;
-        for record_result in reader.rc_records() {
-            let record = record_result?;
-            if is_primary_read(&record) {
-                let read_pair_id = RecordManager::get_read_pair_id(record.as_ref());
-                if incomplete_read_pair_ids.contains(&read_pair_id) {
-                    let read_pair_locus_ids = record_manager.get_read_pair_locus_ids(&read_pair_id);
-                    for locus_id in read_pair_locus_ids {
-                        let read_pair = record_manager.get_read_pair_by_id(&read_pair_id).unwrap();
-
-                        // Get the present read's kind
-                        let read_order = if read_pair.first.is_some() {
-                            ReadOrder::First
-                        } else {
-                            ReadOrder::Last
-                        };
-                        let read_kind = record_manager
-                            .get_read_kind(&locus_id, &read_pair_id, &read_order)
-                            .unwrap();
-
-                        // Unmapped mates of flanking reads should be added as in repeat reads
-                        if read_kind == ReadKind::FlankingRead {
-                            record_manager.add_read_to_locus_with_kind(
-                                &locus_id,
-                                record.as_ref(),
-                                ReadKind::InRepeatRead,
-                            );
-                        }
-                    }
+    info!("Rescuing unmapped mates");
+    let unpaired_records = brecord_manager.get_unpaired_records();
+    reader.fetch(FetchDefinition::Unmapped)?;
+    for record_result in reader.rc_records() {
+        let record = record_result?;
+        if is_primary_read(&record) {
+            let qname = record.qname();
+            if let Some(info) = unpaired_records.get(qname) {
+                if info.order != record.order_in_template() {
+                    brecord_manager.write_record(&record)?;
                 }
             }
         }
     }
 
-    // Write the read pairs to the output file
-    for locus in catalog.iter() {
-        let read_pairs = record_manager.get_locus_read_pairs(&locus.id);
-        for read_pair in read_pairs {
-            // Do not write incomplete read pairs
-            if read_pair.len() != 2 {
-                continue;
-            }
-
-            let first_read_kind =
-                record_manager.get_read_kind(&locus.id, &read_pair.id, &ReadOrder::First);
-            let last_read_kind =
-                record_manager.get_read_kind(&locus.id, &read_pair.id, &ReadOrder::Last);
-
-            match (first_read_kind, last_read_kind) {
-                (Some(first_read_kind), Some(last_read_kind)) => {
-                    let mut first_read = read_pair.first.as_ref().unwrap().clone();
-                    let mut last_read = read_pair.last.as_ref().unwrap().clone();
-
-                    let read_pair_kind = record_manager
-                        .get_read_pair_kind(&locus.id, &read_pair.id)
-                        .to_string();
-
-                    clear_record_tags(&mut first_read)?;
-                    clear_record_tags(&mut last_read)?;
-
-                    first_read.push_aux(SAM_ID_TAG, Aux::String(&locus.id))?;
-                    last_read.push_aux(SAM_ID_TAG, Aux::String(&locus.id))?;
-
-                    first_read
-                        .push_aux(SAM_READ_TYPE_TAG, Aux::String(&first_read_kind.to_string()))?;
-                    last_read
-                        .push_aux(SAM_READ_TYPE_TAG, Aux::String(&last_read_kind.to_string()))?;
-
-                    first_read.push_aux(SAM_READ_PAIR_TYPE_TAG, Aux::String(&read_pair_kind))?;
-                    last_read.push_aux(SAM_READ_PAIR_TYPE_TAG, Aux::String(&read_pair_kind))?;
-
-                    writer.write(&first_read)?;
-                    writer.write(&last_read)?;
-                }
-                _ => {
-                    warn!(
-                        "Read pair {} for locus {} is does not have their types defined",
-                        read_pair.id, locus.id
-                    );
-                }
-            }
-        }
+    let unpaired_records = brecord_manager.get_unpaired_records();
+    if !unpaired_records.is_empty() {
+        warn!(
+            "Number of unpaired reads in the bag: {:?}",
+            unpaired_records.len()
+        );
     }
 
-    Ok(())
+    Ok(qname_locus_map)
 }
 
 fn clear_record_tags(record: &mut Record) -> Result<()> {
@@ -380,7 +296,9 @@ fn clear_record_tags(record: &mut Record) -> Result<()> {
 }
 
 pub fn is_primary_read(read: &Record) -> bool {
-    !read.is_secondary() && !read.is_supplementary()
+    let order = read.order_in_template();
+    let valid_order = matches!(order, OrderInTemplate::First | OrderInTemplate::Last);
+    !read.is_secondary() && !read.is_supplementary() && valid_order
 }
 
 pub fn is_in_repeat_read(

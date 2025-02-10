@@ -1,19 +1,22 @@
 use crate::{
     catalog::TandemRepeatCatalog,
     constants::{DEFAULT_KMER_SIZE, OUT_SUFFIX_BAG},
-    extract::{get_locus_id, Read},
+    extract::{get_locus_id, LocusId, QueryNameLocusMap, Read},
     genotype::GenotypeProblemDefinition,
+    records::ReadPairId,
     reference::TandemRepeatReference,
     util::Utf8String,
 };
 use anyhow::{anyhow, Result};
-use bio::io::fasta;
+use bio::{bio_types::annot::loc, io::fasta};
 use clap::{arg, Parser};
+use core::panic;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read as BAMRead};
 use std::{
     collections::HashMap,
     fs::File,
+    io::Read as StdRead,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -33,7 +36,7 @@ pub struct DefineCommandArgs {
     #[arg(long)]
     pub bag: Option<PathBuf>,
 
-    /// Only keep the top n positions with the lowest edit distance for flanking reads
+    /// Only keep the top n positions with the lowest edit distance
     #[arg(short = 'n', default_value_t = 1)]
     pub num_lowest_distances: usize,
 
@@ -59,6 +62,13 @@ pub fn run_define_command(args: &DefineCommandArgs, output_prefix: &Path) -> Res
     let mut reader = bam::Reader::from_path(bag_path)?;
     let records: Vec<bam::Record> = reader.records().map(|r| r.unwrap()).collect();
     info!("Loaded {} reads into bag", records.len());
+
+    info!("Loading locus-read associations");
+    let qname_locus_pat = output_prefix.with_extension("bag.bin");
+    let qname_locus_file = File::open(qname_locus_pat)?;
+    let bytes = qname_locus_file.bytes().collect::<Result<Vec<u8>, _>>()?;
+    let qname_locus_map: QueryNameLocusMap = bitcode::decode(&bytes)?;
+    info!("Loaded {} locus-read associations", qname_locus_map.len());
 
     let header = reader.header().clone();
     let tid_to_name_map = header
@@ -94,29 +104,30 @@ pub fn run_define_command(args: &DefineCommandArgs, output_prefix: &Path) -> Res
     info!("Processing reads");
 
     records.par_iter().try_for_each(|record| {
-        let locus_id = get_locus_id(record)?;
+        let locus_ids = qname_locus_map.get(record.qname()).unwrap();
+        for locus_id in locus_ids {
+            if let Some(prob_def_mutex) = prob_def_map.get(locus_id) {
+                let mut prob_def = prob_def_mutex
+                    .lock()
+                    .map_err(|_| anyhow!("Could not lock problem definition mutex"))?;
 
-        if let Some(prob_def_mutex) = prob_def_map.get(locus_id) {
-            let mut prob_def = prob_def_mutex
-                .lock()
-                .map_err(|_| anyhow!("Could not lock problem definition mutex"))?;
+                let record_contig = tid_to_name_map[&record.tid()].clone();
 
-            let record_contig = tid_to_name_map[&record.tid()].clone();
+                let read = Read::from_record(
+                    record,
+                    &record_contig,
+                    &prob_def.reference,
+                    args.num_lowest_distances,
+                )?;
 
-            let read = Read::from_record(
-                record,
-                &record_contig,
-                &prob_def.reference,
-                args.num_lowest_distances,
-            )?;
-
-            prob_def.add_read(read)?;
-        } else {
-            warn!(
-                "Read {} is tagged with locus {}, but it's not in the catalog. Skipping...",
-                record.qname().to_string(),
-                locus_id
-            );
+                prob_def.add_read(read)?;
+            } else {
+                warn!(
+                    "Read {} is tagged with locus {}, but it's not in the catalog. Skipping...",
+                    record.qname().to_string(),
+                    locus_id
+                );
+            }
         }
 
         anyhow::Ok(())
@@ -134,6 +145,7 @@ pub fn run_define_command(args: &DefineCommandArgs, output_prefix: &Path) -> Res
         .map(|r| r.unwrap())
         .collect();
 
+    info!("Writing definitions to file");
     let output_path = output_prefix.with_extension("defs.json");
     let writer = File::create(output_path)?;
     serde_json::to_writer_pretty(writer, &sim_data_vec)?;
