@@ -132,19 +132,28 @@ impl TandemRepeatCatalog {
     // }
 
     pub fn find_motifs(&self, seq: &[u8]) -> Vec<&TandemRepeatLocus> {
-        let mut result = HashSet::new();
+        let mut locus_idx_counts: HashMap<usize, usize> = HashMap::new();
         let mut i = 0;
         let k = self.k;
         while i + k <= seq.len() {
             let kmer = &seq[i..i + k];
-            let locus_idxs = self.motif_map.get(kmer);
-            if let Some(locus_idxs) = locus_idxs {
+            let kmer_locus_idxs = self.motif_map.get(kmer);
+            if let Some(locus_idxs) = kmer_locus_idxs {
                 for &locus_idx in locus_idxs {
-                    result.insert(locus_idx);
+                    let count = locus_idx_counts.entry(locus_idx).or_default();
+                    *count += 1;
                 }
             }
             i += k;
         }
+
+        // Find locus indices with the highest count
+        let max_count = locus_idx_counts.values().max().unwrap_or(&0);
+        let result: Vec<usize> = locus_idx_counts
+            .iter()
+            .filter(|(_, &count)| count == *max_count)
+            .map(|(&locus_idx, _)| locus_idx)
+            .collect();
         result.iter().map(|&i| &self.loci[i]).collect()
     }
 
