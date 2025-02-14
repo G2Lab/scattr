@@ -81,6 +81,7 @@ scattr <OUTPUT_PREFIX> stats [OPTIONS]
 ```
 
 - `<ALIGNMENT>`: Path to the alignment file (BAM or CRAM).
+- `-i, --include-contigs <CONTIGS>`: Contigs to inlcude in estimation (comma-separated list of contig names). Defaults to autosomes.
 - `-n, --num-regions <NUM_REGIONS>`: Number of regions to sample (default: 100).
 - `-l, --region-length <REGION_LENGTH>`: Length of each sampled region (default: 100000).
 - `-@ <THREADS>`: Number of HTSlib threads to use for reading the alignment file.
