@@ -12,7 +12,7 @@ categories = ["command-line-utilities", "science"]
 
 [dependencies]
 aho-corasick = "1.1.2"
-anyhow = "1.0.80"
+anyhow = "1.0.95"
 argmin = { version = "0.10.0", features = ["serde1", "rayon"] }
 argmin-math = "0.4.0"
 argmin-observer-paramwriter = "0.1.0"
