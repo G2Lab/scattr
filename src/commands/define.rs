@@ -1,16 +1,14 @@
 use crate::{
     catalog::TandemRepeatCatalog,
     constants::{DEFAULT_KMER_SIZE, OUT_SUFFIX_BAG},
-    extract::{get_locus_id, LocusId, QueryNameLocusMap, Read},
+    extract::{QueryNameLocusMap, Read},
     genotype::GenotypeProblemDefinition,
-    records::ReadPairId,
     reference::TandemRepeatReference,
     util::Utf8String,
 };
 use anyhow::{anyhow, Result};
-use bio::{bio_types::annot::loc, io::fasta};
+use bio::io::fasta;
 use clap::{arg, Parser};
-use core::panic;
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read as BAMRead};
 use std::{
@@ -35,6 +33,10 @@ pub struct DefineCommandArgs {
     /// Path to bag of reads (BAM or CRAM)
     #[arg(long)]
     pub bag: Option<PathBuf>,
+
+    /// Use levenshtein distance instead of hamming distance
+    #[arg(short)]
+    pub levenshtein: bool,
 
     /// Only keep the top n positions with the lowest edit distance
     #[arg(short = 'n', default_value_t = 1)]
@@ -118,6 +120,7 @@ pub fn run_define_command(args: &DefineCommandArgs, output_prefix: &Path) -> Res
                     &record_contig,
                     &prob_def.reference,
                     args.num_lowest_distances,
+                    args.levenshtein,
                 )?;
 
                 prob_def.add_read(read)?;

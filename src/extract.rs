@@ -83,6 +83,7 @@ impl Read {
         record_contig: &str,
         reference: &TandemRepeatReference,
         num_lowest_distances: usize,
+        use_levenshtein: bool,
     ) -> Result<Self> {
         let qname = String::from_utf8(record.qname().to_vec())?;
         let source_contig = record_contig.to_string();
@@ -102,6 +103,7 @@ impl Read {
             reference.left_flank_seq.as_ref(),
             reference.right_flank_seq.as_ref(),
             num_lowest_distances,
+            use_levenshtein,
         );
         let relative_pos = generator.relative_position_set();
 

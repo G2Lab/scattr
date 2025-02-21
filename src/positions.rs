@@ -1,5 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
+use bio::alignment::distance::simd::levenshtein;
 use bio::{alignment::distance::simd::hamming, alphabets::dna::revcomp};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -105,6 +106,7 @@ impl RepeatAlignmentPositionSetGenerator {
         left_flank_seq: &[Base],
         right_flank_seq: &[Base],
         num_lowest_edit_scores: usize,
+        use_levenshtein: bool,
     ) -> Self {
         let relative_pos = Self::get_relative_pos(
             left_flank_seq,
@@ -112,6 +114,7 @@ impl RepeatAlignmentPositionSetGenerator {
             repeat_unit,
             query,
             num_lowest_edit_scores,
+            use_levenshtein,
         );
 
         Self {
@@ -151,6 +154,7 @@ impl RepeatAlignmentPositionSetGenerator {
         genotype: TandemRepeatGenotype,
         left_flank_len: usize,
         right_flank_len: usize,
+        use_levenshtein: bool,
     ) -> Vec<(AlignmentPosition, HammingDistance)> {
         let (hap1_genotype, hap2_genotype) = genotype.into();
         let (hap1_repeat_start, hap2_repeat_start) =
@@ -169,12 +173,14 @@ impl RepeatAlignmentPositionSetGenerator {
             hap1_repeat_end,
             left_flank_len,
             right_flank_len,
+            use_levenshtein,
         );
         let hap2_abs_positions = self.generate_absolute_position_set(
             hap2_repeat_start,
             hap2_repeat_end,
             left_flank_len,
             right_flank_len,
+            use_levenshtein,
         );
 
         let hap1_positions = Self::convert_absolute(hap1_abs_positions, Haplotype::Haplotype1);
@@ -239,6 +245,7 @@ impl RepeatAlignmentPositionSetGenerator {
         repeat_end: Position,
         left_flank_len: usize,
         right_flank_len: usize,
+        use_levenshtein: bool,
     ) -> Vec<(RepeatAlignmentPosition, HammingDistance)> {
         if ((repeat_end - repeat_start) as usize) < self.query.len() {
             self.generate_absolute_position_set_short(
@@ -246,6 +253,7 @@ impl RepeatAlignmentPositionSetGenerator {
                 repeat_end,
                 left_flank_len,
                 right_flank_len,
+                use_levenshtein,
             )
         } else {
             self.generate_absolute_position_set_long(repeat_start, repeat_end)
@@ -258,6 +266,7 @@ impl RepeatAlignmentPositionSetGenerator {
         repeat_end: Position,
         left_flank_len: usize,
         right_flank_len: usize,
+        use_levenshtein: bool,
     ) -> Vec<(RepeatAlignmentPosition, HammingDistance)> {
         assert!((repeat_end - repeat_start) % self.repeat_unit.len() as i64 == 0);
         let num_repeats = (repeat_end - repeat_start) as usize / self.repeat_unit.len();
@@ -270,7 +279,7 @@ impl RepeatAlignmentPositionSetGenerator {
             &self.repeat_unit,
             num_repeats,
         );
-        let dists = Self::sliding_hamming(&reference, &self.query);
+        let dists = Self::sliding_distance(&reference, &self.query, use_levenshtein);
 
         Self::filter_by_num_lowest_edit_scores(dists, self.num_lowest_edit_scores)
     }
@@ -352,16 +361,21 @@ impl RepeatAlignmentPositionSetGenerator {
             .collect()
     }
 
-    fn sliding_hamming(
+    fn sliding_distance(
         reference: &[Base],
         query: &[Base],
+        use_levenshtein: bool,
     ) -> HashMap<HammingDistance, Vec<RepeatAlignmentPosition>> {
         let query_orientations = Self::get_query_orientations(query);
         let mut dists = HashMap::new();
         for (orientation, query) in query_orientations {
             for i in 0..(reference.len() - query.len() + 1) {
                 let ref_slice = &reference[i..i + query.len()];
-                let d = hamming(ref_slice, &query);
+                let d = if use_levenshtein {
+                    levenshtein(ref_slice, &query) as u64
+                } else {
+                    hamming(ref_slice, &query)
+                };
                 dists
                     .entry(d)
                     .or_insert(vec![])
@@ -437,6 +451,7 @@ impl RepeatAlignmentPositionSetGenerator {
         repeat_unit: &[Base],
         query: &[Base],
         num_lowest_edit_scores: usize,
+        use_levenshtein: bool,
     ) -> Vec<(RepeatAlignmentPosition, HammingDistance)> {
         // Create references to calculate hamming distances against
         let left_reference =
@@ -447,12 +462,24 @@ impl RepeatAlignmentPositionSetGenerator {
             Self::in_repeat_reference(repeat_unit, query.len() + repeat_unit.len() - 1);
 
         // Calculate sliding hamming distances between references and query
-        let left_flank_pos =
-            Self::sliding_hamming_left_flank(&left_reference, query, left_flank_seq.len());
-        let right_flank_pos =
-            Self::sliding_hamming_right_flank(&right_reference, query, query.len() - 1);
-        let in_repeat_pos =
-            Self::sliding_hamming_in_repeat(&in_repeat_reference, query, repeat_unit.len());
+        let left_flank_pos = Self::sliding_distance_left_flank(
+            &left_reference,
+            query,
+            left_flank_seq.len(),
+            use_levenshtein,
+        );
+        let right_flank_pos = Self::sliding_distance_right_flank(
+            &right_reference,
+            query,
+            query.len() - 1,
+            use_levenshtein,
+        );
+        let in_repeat_pos = Self::sliding_distance_in_repeat(
+            &in_repeat_reference,
+            query,
+            repeat_unit.len(),
+            use_levenshtein,
+        );
 
         // Merge into a single hashmap
         let chained_iter = left_flank_pos
@@ -468,17 +495,22 @@ impl RepeatAlignmentPositionSetGenerator {
         Self::filter_by_num_lowest_edit_scores(merged, num_lowest_edit_scores)
     }
 
-    fn sliding_hamming_left_flank(
+    fn sliding_distance_left_flank(
         reference: &[Base],
         query: &[Base],
         repeat_start: usize,
+        use_levenshtein: bool,
     ) -> HashMap<HammingDistance, Vec<RepeatAlignmentPosition>> {
         let query_orientations = Self::get_query_orientations(query);
         let mut dists = HashMap::new();
         for (orientation, target_query) in query_orientations {
             for i in 0..repeat_start {
                 let ref_slice = &reference[i..i + target_query.len()];
-                let d = hamming(ref_slice, &target_query);
+                let d = if use_levenshtein {
+                    levenshtein(ref_slice, &target_query) as u64
+                } else {
+                    hamming(ref_slice, &target_query)
+                };
                 let relative_pos = i as i64 - repeat_start as i64;
                 dists.entry(d).or_insert(vec![]).push(
                     RepeatAlignmentPosition::RelativeToRepeatStart(orientation, relative_pos),
@@ -496,10 +528,11 @@ impl RepeatAlignmentPositionSetGenerator {
         dists
     }
 
-    fn sliding_hamming_right_flank(
+    fn sliding_distance_right_flank(
         reference: &[Base],
         query: &[Base],
         repeat_end: usize,
+        use_levenshtein: bool,
     ) -> HashMap<HammingDistance, Vec<RepeatAlignmentPosition>> {
         let query_orientations = Self::get_query_orientations(query);
         let mut dists = HashMap::new();
@@ -511,7 +544,11 @@ impl RepeatAlignmentPositionSetGenerator {
             let range_end = reference.len() + 1 - target_query.len();
             for i in range_start..range_end {
                 let ref_slice = &reference[i..i + target_query.len()];
-                let d = hamming(ref_slice, &target_query);
+                let d = if use_levenshtein {
+                    levenshtein(ref_slice, &target_query) as u64
+                } else {
+                    hamming(ref_slice, &target_query)
+                };
                 let rel_pos = (i as i64) - (repeat_end as i64);
                 dists.entry(d).or_insert(vec![]).push(
                     RepeatAlignmentPosition::RelativeToRepeatEnd(orientation, rel_pos),
@@ -521,17 +558,22 @@ impl RepeatAlignmentPositionSetGenerator {
         dists
     }
 
-    fn sliding_hamming_in_repeat(
+    fn sliding_distance_in_repeat(
         reference: &[Base],
         query: &[Base],
         repeat_unit_len: usize,
+        use_levenshtein: bool,
     ) -> HashMap<HammingDistance, Vec<RepeatAlignmentPosition>> {
         let query_orientations = Self::get_query_orientations(query);
         let mut dists = HashMap::new();
         for (orientation, query) in query_orientations {
             for i in 0..repeat_unit_len {
                 let ref_slice = &reference[i..i + query.len()];
-                let d = hamming(ref_slice, &query);
+                let d = if use_levenshtein {
+                    levenshtein(ref_slice, &query) as u64
+                } else {
+                    hamming(ref_slice, &query)
+                };
                 dists
                     .entry(d)
                     .or_insert(vec![])

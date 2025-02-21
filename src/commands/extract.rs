@@ -4,7 +4,6 @@ use crate::{
     extract::{extract_bag_of_reads, RepeatPurityScoreParams},
 };
 use anyhow::Ok;
-use bitcode::{Decode, Encode};
 use clap::{arg, Parser};
 use rust_htslib::bam::{self, Read};
 use std::{

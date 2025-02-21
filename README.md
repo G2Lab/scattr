@@ -114,6 +114,7 @@ scattr <OUTPUT_PREFIX> define [OPTIONS] <CATALOG> <REFERENCE>
 
 - `<CATALOG>`: Path to the TR catalog file (TSV format).
 - `<REFERENCE>`: Path to the reference genome (FASTA format). A index file `.fa.fai` must also exist.
+- `-l`: Use levenshtein distance
 - Options include `--bag`, `-n`, etc., to customize the problem definition process and input file paths.  Use `--help` option to view details.
 
 #### 4. `genotype`

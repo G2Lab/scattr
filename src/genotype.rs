@@ -134,7 +134,12 @@ impl<'a> GenotypeProblem<'a> {
             .aln_position_generators
             .iter()
             .map(|g| {
-                g.generate_position_set(genotype.clone(), self.left_flank_len, self.right_flank_len)
+                g.generate_position_set(
+                    genotype.clone(),
+                    self.left_flank_len,
+                    self.right_flank_len,
+                    false,
+                )
             })
             .collect();
 
