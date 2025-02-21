@@ -724,7 +724,7 @@ fn filter_positions_for_mate(
     valid_mate_positions
 }
 
-impl<'a> CostFunction for AlignmentProblem<'a> {
+impl CostFunction for AlignmentProblem<'_> {
     type Param = Vec<AlignmentPosition>;
     type Output = f64;
 
@@ -734,7 +734,7 @@ impl<'a> CostFunction for AlignmentProblem<'a> {
     }
 }
 
-impl<'a> Anneal for AlignmentProblem<'a> {
+impl Anneal for AlignmentProblem<'_> {
     type Param = Vec<AlignmentPosition>;
     type Output = Vec<AlignmentPosition>;
     type Float = f64;

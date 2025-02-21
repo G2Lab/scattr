@@ -617,7 +617,7 @@ impl<'de> Deserialize<'de> for RepeatAlignmentPosition {
     {
         struct RepeatAlignmentPositionVisitor;
 
-        impl<'de> Visitor<'de> for RepeatAlignmentPositionVisitor {
+        impl Visitor<'_> for RepeatAlignmentPositionVisitor {
             type Value = RepeatAlignmentPosition;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

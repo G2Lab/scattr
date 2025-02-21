@@ -3,15 +3,14 @@ use crate::{
     constants::{SAM_ID_TAG, SAM_READ_PAIR_TYPE_TAG, SAM_READ_TYPE_TAG},
     positions::{HammingDistance, RepeatAlignmentPosition, RepeatAlignmentPositionSetGenerator},
     records::{
-        BetterRecordManager, OrderInTemplate, QueryName, ReadKind, ReadPairId, RecordManager,
-        RecordOrder,
+        BetterRecordManager, OrderInTemplate, QueryName, ReadPairId, RecordManager, RecordOrder,
     },
     reference::TandemRepeatReference,
     sequence::Sequence,
     util::Utf8String,
 };
 use anyhow::anyhow;
-use anyhow::{Context, Ok, Result};
+use anyhow::{Ok, Result};
 use bio::alphabets::dna::revcomp;
 use indicatif::{ProgressBar, ProgressStyle};
 use rust_htslib::bam::FetchDefinition;
@@ -24,7 +23,6 @@ use serde::{
     de::{self, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
-use smallvec::SmallVec;
 use std::hash::Hash;
 use std::str::FromStr;
 use std::{collections::HashMap, time::Duration};
@@ -197,7 +195,7 @@ pub fn extract_bag_of_reads(
                         already_written = true;
                     }
                     qname_locus_map
-                        .entry(record.qname().clone().to_vec())
+                        .entry(record.qname().to_vec())
                         .or_default()
                         .insert(locus.id.clone());
                 }
@@ -228,7 +226,7 @@ pub fn extract_bag_of_reads(
                         already_written = true;
                     }
                     qname_locus_map
-                        .entry(record.qname().clone().to_vec())
+                        .entry(record.qname().to_vec())
                         .or_default()
                         .insert(locus.id.clone());
                 }
@@ -284,7 +282,7 @@ pub fn extract_bag_of_reads(
     Ok(qname_locus_map)
 }
 
-fn clear_record_tags(record: &mut Record) -> Result<()> {
+pub fn clear_record_tags(record: &mut Record) -> Result<()> {
     if record.aux(SAM_ID_TAG).is_ok() {
         record.remove_aux(SAM_ID_TAG)?;
     }

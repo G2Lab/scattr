@@ -118,7 +118,7 @@ impl TandemRepeatCatalog {
                 .find(start..end)
                 .map(|entry| entry.data())
                 .collect::<Vec<_>>();
-            return indices.iter().map(|&i| &self.loci[*i]).collect();
+            indices.iter().map(|&i| &self.loci[*i]).collect()
         } else {
             Vec::new()
         }
