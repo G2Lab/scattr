@@ -10,6 +10,10 @@ categories = ["command-line-utilities", "science"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[profile.profiling]
+inherits = "release"
+debug = true
+
 [dependencies]
 aho-corasick = "1.1.2"
 anyhow = "1.0.80"
