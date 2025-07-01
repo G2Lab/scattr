@@ -13,7 +13,7 @@ ScatTR is a method for estimating the copy number of large tandem repeats (TRs) 
 
 ### Pre-built binaries
 
-Binaries for the latest version of ScatTR can be found in the [releases](https://github.com/rashidalabri/scattr/releases) page.
+Binaries for the latest version of ScatTR can be found in the [releases](https://github.com/rashidalabri/scattr/releases) page. Pre-built binaries are available for macOS (both Intel x86_64 and Apple Silicon arm64), compiled on GitHub-hosted macOS runners (macOS 12 or later). For Linux, binaries are provided for x86_64 systems, built natively on Ubuntu 22.04 LTS runners, and for arm64 systems, which are cross-compiled on Ubuntu.
 
 ### Build from source
 
